@@ -1,0 +1,325 @@
+@model AI_4_SE_BattleShip.Models.GameState
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width" />
+    <title>Battleship</title>
+    <style>
+        body { font-family: Arial, Helvetica, sans-serif; background: linear-gradient(180deg,#0f1724 0%, #071129 100%); color: #e6eef8; padding: 20px; }
+        h1 { margin: 0 0 12px 0; font-size: 28px; color: #fff; }
+        form { margin-bottom: 12px; }
+        button { background: #0ea5a4; color: #042027; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+        button:hover { filter: brightness(1.05); }
+
+        .info { display:flex; gap:24px; align-items:center; margin-bottom:12px; }
+        #turnCount, #status, #timer { background: rgba(255,255,255,0.04); padding:8px 10px; border-radius:6px; }
+
+        .boards { display: flex; gap: 40px; align-items:flex-start; }
+        .board-wrap { background: rgba(255,255,255,0.02); padding:12px; border-radius:8px; box-shadow: 0 6px 18px rgba(0,0,0,0.6); }
+        table { border-collapse: collapse; }
+        /* default unshot cell: sky-blue */
+        td { width: 36px; height: 36px; text-align:center; border: 1px solid rgba(255,255,255,0.06); cursor: pointer; transition: transform 120ms ease, box-shadow 120ms ease; background: linear-gradient(180deg,#e0f7ff 0%, #bae6fd 100%); position: relative; overflow: hidden; }
+        td:hover { transform: translateY(-3px); box-shadow: 0 6px 12px rgba(0,0,0,0.5); }
+
+        /* ship (only shown to owner when allowed) */
+        .ship { background: linear-gradient(180deg,#6b7280,#374151); box-shadow: inset 0 -4px 8px rgba(0,0,0,0.4); }
+
+        /* hit / miss visuals */
+        .hit { background: transparent; }
+        .miss { background: radial-gradient(circle at 30% 30%, #bbf7d0 0%, #34d399 40%, rgba(0,0,0,0) 70%); box-shadow: 0 4px 14px rgba(56,189,95,0.12); }
+
+        .disabled { opacity: 0.45; pointer-events: none; }
+
+        /* cell images */
+        .cell-img { width:100%; height:100%; object-fit:cover; display:block; pointer-events:none; position:absolute; left:0; top:0; }
+        .ship-img { transform: scale(0.98);} 
+        .explosion-img { pointer-events:none; }
+
+        /* animation helpers */
+        @@keyframes pop {
+            0% { transform: scale(0.6); opacity: 0; }
+            60% { transform: scale(1.12); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        @@keyframes ripple {
+            0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.9); }
+            70% { box-shadow: 0 0 0 14px rgba(34,197,94,0.06); }
+            100% { box-shadow: 0 0 0 18px rgba(34,197,94,0); }
+        }
+
+        .animate-pop { animation: pop 420ms cubic-bezier(.2,.9,.3,1); }
+        .animate-ripple { animation: ripple 700ms linear; }
+
+        /* responsive */
+        @@media (max-width:800px) { td { width: 28px; height: 28px; } .boards { flex-direction: column; gap: 18px; } }
+    </style>
+</head>
+<body>
+    <h1>Mini Battleship</h1>
+    <form method="post" asp-action="NewGame">
+        <label style="margin-right:12px"><input type="checkbox" name="hotseat" value="true" /> Hot-seat (2 players)</label>
+        <button type="submit">New Game</button>
+    </form>
+
+    <div class="info">
+        <p id="turnCount">Turns: @Model.TurnCount</p>
+        <p id="status">Current: @Model.CurrentPlayer.Name (@(Model.PlayerB.IsBot ? "vs Bot" : "Hot-seat"))</p>
+        @if (!Model.PlayerB.IsBot)
+        {
+            <p id="timer">Time left: <span id="timeLeft">10</span>s</p>
+        }
+    </div>
+
+    <div class="boards">
+        <div class="board-wrap">
+            <h2 style="margin-top:0">Board A (@Model.PlayerA.Name)</h2>
+            <table id="boardA">
+                @for (int i = 0; i < Model.PlayerA.Board.Size.GetLength(0); i++)
+                {
+                    <tr>
+                        @for (int j = 0; j < Model.PlayerA.Board.Size.GetLength(1); j++)
+                        {
+                            var shipCell = Model.PlayerA.Board.Ships.SelectMany(s => s.Positions).FirstOrDefault(p => p.X == i && p.Y == j);
+                            var shot = Model.PlayerA.Board.ShotsFired.FirstOrDefault(s => s.X == i && s.Y == j);
+                            var cls = "";
+                            if (shot != null) cls = (shipCell != null) ? "hit" : "miss";
+
+                            var dataShip = shipCell != null ? "data-ship=\"1\"" : "";
+                            var shipVisible = Model.PlayerB.IsBot && shipCell != null; // show ships for player when vs-bot
+                            var explosionVisible = shipCell != null && shipCell.IsHit; // show explosion if ship cell was hit
+
+                            <td data-owner="A" data-x="@i" data-y="@j" @Html.Raw(dataShip) class="@cls">
+                                <img data-ship-img src="@Url.Content("~/Images/ship.jpg")" class="cell-img ship-img" style="@(shipVisible ? "display:block;" : "display:none;")" />
+                                <img data-explosion-img src="@Url.Content("~/Images/explosion.gif")" class="cell-img explosion-img" style="@(explosionVisible ? "display:block;" : "display:none;")" />
+                            </td>
+                        }
+                    </tr>
+                }
+            </table>
+        </div>
+
+        <div class="board-wrap">
+            <h2 style="margin-top:0">Board B (@Model.PlayerB.Name)</h2>
+            <table id="boardB">
+                @for (int i = 0; i < Model.PlayerB.Board.Size.GetLength(0); i++)
+                {
+                    <tr>
+                        @for (int j = 0; j < Model.PlayerB.Board.Size.GetLength(1); j++)
+                        {
+                            var shipCell = Model.PlayerB.Board.Ships.SelectMany(s => s.Positions).FirstOrDefault(p => p.X == i && p.Y == j);
+                            var shot = Model.PlayerB.Board.ShotsFired.FirstOrDefault(s => s.X == i && s.Y == j);
+                            var cls = "";
+                            if (shot != null) cls = (shipCell != null) ? "hit" : "miss";
+
+                            var dataShip = shipCell != null ? "data-ship=\"1\"" : "";
+                            var explosionVisibleB = shipCell != null && shipCell.IsHit;
+
+                            <td data-owner="B" data-x="@i" data-y="@j" @Html.Raw(dataShip) class="@cls">
+                                <img data-ship-img src="@Url.Content("~/Images/ship.jpg")" class="cell-img ship-img" style="display:none;" />
+                                <img data-explosion-img src="@Url.Content("~/Images/explosion.gif")" class="cell-img explosion-img" style="@(explosionVisibleB ? "display:block;" : "display:none;")" />
+                            </td>
+                        }
+                    </tr>
+                }
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // small audio helpers using Web Audio API (no external files required)
+        var AudioCtx = null;
+        function ensureAudio() {
+            if (!AudioCtx) {
+                try { AudioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) { AudioCtx = null; }
+            }
+            return AudioCtx;
+        }
+
+        function playHitSound() {
+            var ctx = ensureAudio();
+            if (!ctx) return;
+            var o = ctx.createOscillator();
+            var g = ctx.createGain();
+            o.type = 'sawtooth';
+            o.frequency.value = 220 + Math.random() * 60;
+            g.gain.value = 0.0001;
+            o.connect(g);
+            g.connect(ctx.destination);
+            var now = ctx.currentTime;
+            g.gain.setValueAtTime(0.0001, now);
+            g.gain.exponentialRampToValueAtTime(0.18, now + 0.02);
+            g.gain.exponentialRampToValueAtTime(0.0001, now + 0.5);
+            o.start(now);
+            o.stop(now + 0.55);
+        }
+
+        function playMissSound() {
+            var ctx = ensureAudio();
+            if (!ctx) return;
+            var o = ctx.createOscillator();
+            var g = ctx.createGain();
+            o.type = 'triangle';
+            o.frequency.value = 800;
+            g.gain.value = 0.0001;
+            o.connect(g);
+            g.connect(ctx.destination);
+            var now = ctx.currentTime;
+            g.gain.setValueAtTime(0.0001, now);
+            g.gain.exponentialRampToValueAtTime(0.08, now + 0.01);
+            g.gain.exponentialRampToValueAtTime(0.0001, now + 0.25);
+            o.start(now);
+            o.stop(now + 0.28);
+        }
+
+        // server-provided state
+        var currentPlayer = '@Model.CurrentPlayer.Name';
+        var hotseat = '@((!Model.PlayerB.IsBot).ToString().ToLower())'; // true if hot-seat
+        var turnEl = document.getElementById('turnCount');
+        var statusEl = document.getElementById('status');
+        var timeLeftEl = document.getElementById('timeLeft');
+
+        var countDownId = null;
+        var TURN_SECONDS = 10;
+
+        function setStatus() {
+            statusEl.textContent = 'Current: ' + currentPlayer + ' (' + (hotseat ? 'Hot-seat' : 'vs Bot') + ')';
+        }
+
+        function revealShipsForCurrentPlayer() {
+            if (!hotseat) return; // in vs-bot, ships already revealed appropriately on render
+
+            // hide all ship images
+            document.querySelectorAll('img[data-ship-img]').forEach(function(img){ img.style.display = 'none'; });
+            // reveal ship images only for current player's owner
+            var owner = (currentPlayer === 'Player A') ? 'A' : 'B';
+            document.querySelectorAll('td[data-owner="' + owner + '"][data-ship] img[data-ship-img]').forEach(function(img){ img.style.display = 'block'; });
+        }
+
+        function startTurnTimer() {
+            if (!hotseat) return; // do not run timer in vs-bot mode
+
+            clearTurnTimer();
+            var left = TURN_SECONDS;
+            if (timeLeftEl) timeLeftEl.textContent = left;
+            countDownId = setInterval(function(){
+                left--;
+                if (timeLeftEl) timeLeftEl.textContent = left;
+                if (left <= 0) {
+                    clearTurnTimer();
+                    fetch('/GameState/Skip', { method: 'POST' }).then(r => r.json()).then(data => {
+                        if (data.turnCount !== undefined) turnEl.textContent = 'Turns: ' + data.turnCount;
+                        if (data.nextPlayer) {
+                            currentPlayer = data.nextPlayer;
+                            setStatus();
+                            revealShipsForCurrentPlayer();
+                            updateClickableState();
+                            startTurnTimer();
+                        }
+                        if (data.botX !== undefined) {
+                            markCell('A', data.botX, data.botY, data.botHit);
+                            if (data.botHit) playHitSound(); else playMissSound();
+                            if (data.botGameOver) alert('Bot wins!');
+                        }
+                    });
+                }
+            }, 1000);
+        }
+
+        function clearTurnTimer(){ if (countDownId) { clearInterval(countDownId); countDownId = null; } if (timeLeftEl) timeLeftEl.textContent = TURN_SECONDS; }
+
+        function updateClickableState() {
+            var cells = document.querySelectorAll('td[data-owner]');
+            cells.forEach(function(td){ td.classList.remove('disabled'); });
+
+            if (!hotseat) {
+                if (currentPlayer !== 'Player A') {
+                    document.querySelectorAll('#boardB td').forEach(td => td.classList.add('disabled'));
+                } else {
+                    document.querySelectorAll('#boardA td').forEach(td => td.classList.add('disabled'));
+                }
+            } else {
+                if (currentPlayer === 'Player A') {
+                    document.querySelectorAll('#boardA td').forEach(td => td.classList.add('disabled'));
+                    document.querySelectorAll('#boardB td').forEach(td => td.classList.remove('disabled'));
+                } else {
+                    document.querySelectorAll('#boardB td').forEach(td => td.classList.add('disabled'));
+                    document.querySelectorAll('#boardA td').forEach(td => td.classList.remove('disabled'));
+                }
+            }
+        }
+
+        function animateCell(cell, type) {
+            if (!cell) return;
+            if (type === 'hit') {
+                cell.classList.add('animate-pop');
+                playHitSound();
+                setTimeout(() => cell.classList.remove('animate-pop'), 600);
+            } else {
+                cell.classList.add('animate-ripple');
+                playMissSound();
+                setTimeout(() => cell.classList.remove('animate-ripple'), 750);
+            }
+        }
+
+        function showExplosionOnTD(td) {
+            if (!td) return;
+            var shipImg = td.querySelector('img[data-ship-img]');
+            var expImg = td.querySelector('img[data-explosion-img]');
+            if (shipImg) shipImg.style.display = 'none';
+            if (expImg) { expImg.style.display = 'block'; expImg.classList.add('animate-pop'); setTimeout(() => expImg.classList.remove('animate-pop'), 600); }
+        }
+
+        function markCell(owner, x, y, isHit) {
+            var table = owner === 'A' ? document.getElementById('boardA') : document.getElementById('boardB');
+            if (!table) return;
+            var rows = table.rows;
+            if (rows[x] && rows[x].cells[y]) {
+                var cell = rows[x].cells[y];
+                if (isHit) { cell.classList.add('hit'); showExplosionOnTD(cell); playHitSound(); } else { cell.classList.add('miss'); animateCell(cell,'miss'); playMissSound(); }
+            }
+        }
+
+        document.querySelectorAll('td[data-owner]').forEach(function(td){
+            td.addEventListener('click', function(){
+                if (td.classList.contains('disabled') || td.classList.contains('hit') || td.classList.contains('miss')) return;
+
+                var owner = td.getAttribute('data-owner');
+                var x = td.getAttribute('data-x');
+                var y = td.getAttribute('data-y');
+                var allowed = false;
+                if (!hotseat) { allowed = (currentPlayer === 'Player A' && owner === 'B'); } else { if (currentPlayer === 'Player A') allowed = owner === 'B'; else allowed = owner === 'A'; }
+                if (!allowed) return;
+
+                fetch('/GameState/Fire', {
+                    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'x=' + x + '&y=' + y
+                }).then(r => r.json()).then(data => {
+                    clearTurnTimer();
+
+                    if (owner === 'B') {
+                        if (data.playerHit) { showExplosionOnTD(td); playHitSound(); } else { td.classList.add('miss'); animateCell(td,'miss'); playMissSound(); }
+                    } else {
+                        if (data.playerHit) { showExplosionOnTD(td); playHitSound(); } else { td.classList.add('miss'); animateCell(td,'miss'); playMissSound(); }
+                    }
+
+                    if (data.turnCount !== undefined) turnEl.textContent = 'Turns: ' + data.turnCount;
+
+                    if (data.botX !== undefined) { markCell('A', data.botX, data.botY, data.botHit); }
+
+                    if (data.nextPlayer) { currentPlayer = data.nextPlayer; setStatus(); revealShipsForCurrentPlayer(); }
+
+                    updateClickableState(); startTurnTimer();
+
+                    if (data.playerGameOver) { alert('Player ' + (owner === 'B' ? 'A' : 'B') + ' wins!'); clearTurnTimer(); }
+                    if (data.botGameOver) { alert('Bot wins!'); clearTurnTimer(); }
+                });
+            });
+        });
+
+        // initialize
+        setStatus(); revealShipsForCurrentPlayer(); updateClickableState(); startTurnTimer();
+    </script>
+</body>
+</html>
